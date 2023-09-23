@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
-import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@redstone-finance/evm-connector/contracts/data-services/MainDemoConsumerBase.sol";
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import "./CircularBufferLib.sol";
 import "hardhat/console.sol";
@@ -10,7 +10,7 @@ import "hardhat/console.sol";
 /// @title Correlation Swaps
 /// @author Correlatzia team
 /// @notice This contract can be use to perform correlation swaps on chain
-contract Orders {
+contract Orders  is MainDemoConsumerBase {
     using CircularBufferLib for CircularBufferLib.Buffer;
     struct Deposit {
         uint256 balance;
@@ -26,8 +26,6 @@ contract Orders {
     }
 
     CircularBufferLib.Buffer private priceDifferences;
-    AggregatorV3Interface public immutable priceFeedBTC;
-    AggregatorV3Interface public immutable priceFeedETH;
     // Unalocated balance, can be use to set an order
     mapping(address => Deposit) public balances;
     // saves the orders for a buyer
@@ -43,8 +41,6 @@ contract Orders {
 
     constructor(address _usdc, address aggregatorBTC, address aggregatorETH) {
         usdc = IERC20(_usdc);
-        priceFeedBTC = AggregatorV3Interface(aggregatorBTC);
-        priceFeedETH = AggregatorV3Interface(aggregatorETH);
     }
 
     /// @notice Returns amount and seller for specific order
@@ -143,14 +139,16 @@ contract Orders {
     /// @notice Update price difference for the day
     function updatePriceRing() external {
         (uint256 btc, uint256 eth) = getLatestPrice();
-        priceDifferences.push(btc - eth);
+        priceDifferences.push(btc - eth);//TBD
     }
 
     /// @notice Gets the USDC price for BTC and ETH
-    function getLatestPrice() public view returns (uint256 btc, uint256 eth) {
-        (, int256 priceBTC, , , ) = priceFeedBTC.latestRoundData();
-        (, int256 priceETH, , , ) = priceFeedETH.latestRoundData();
-        btc = uint256(priceBTC);
-        eth = uint256(priceETH);
+    function getLatestPrice(string aSymbol, string bSymbol) public view returns (uint256 a, uint256 b) {
+        bytes32[] memory dataFeedIds = new bytes32[](2);
+        dataFeedIds[0] = bytes32(aSymbol);
+        dataFeedIds[1] = bytes32(bSymbol);
+        uint256[] memory values = getOracleNumericValuesFromTxMsg(dataFeedIds);
+        a = values[0];
+        b = values[1];
     }
 }
