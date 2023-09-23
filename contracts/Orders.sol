@@ -108,10 +108,12 @@ contract Orders {
         uint256 sellerPayoff;
         uint256 buyerPayoff; 
         uint256 payout = order.amount * (newStrike - order.strike);
-        if (order.strike < newStrike) {// if correlation was stronger the payout goes to the seller + the amount
+        if (order.strike < newStrike) {
+            // if correlation was stronger the payout goes to the seller + the amount
             sellerPayoff = order.amount + payout;
             buyerPayoff = order.amount - payout;
-        } else {// if correlation was weaker the payout goes to the buyer + the amount he collateralized
+        } else {
+            // if correlation was weaker the payout goes to the buyer + the amount he collateralized
             sellerPayoff = order.amount - payout;
             buyerPayoff = order.amount + payout;
         }
