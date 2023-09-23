@@ -17,7 +17,6 @@ contract Orders {
     struct Order {
         address seller;
         uint256 amount;
-        uint256 collateral;
         uint256 strike;
         uint256 maturity;
         bool active;
@@ -72,11 +71,11 @@ contract Orders {
         require(amount > 0, "Invalid amount");
         Deposit memory _deposit = balances[seller];
         require(_deposit.balance >= amount, "Invalid seller amount");
-        uint256 collateral = usdc.allowance(msg.sender, address(this));
-        require(collateral >= amount, "Not enough allowance");
+        
+        require(usdc.allowance(msg.sender, address(this)) >= amount, "Not enough allowance");
         require(usdc.transferFrom(msg.sender, address(this), amount));
         
-        Order memory order = Order(seller, amount, collateral, _deposit.strike, block.timestamp + maturity, true);
+        Order memory order = Order(seller, amount, _deposit.strike, block.timestamp + maturity, true);
         
         balances[seller].balance = _deposit.balance - amount;
         orders[msg.sender].push(order);
@@ -108,12 +107,13 @@ contract Orders {
         uint256 newStrike = getCorrelationRate();
         uint256 sellerPayoff;
         uint256 buyerPayoff; 
+        uint256 payout = order.amount * (newStrike - order.strike);
         if (order.strike < newStrike) {// if correlation was stronger the payout goes to the seller + the amount
-            uint256 payout = order.amount * difference;
-            sellerPayoff = order.amount * payout;
-            buyerPayoff = order.collateral * payout;
+            sellerPayoff = order.amount + payout;
+            buyerPayoff = order.amount - payout;
         } else {// if correlation was weaker the payout goes to the buyer + the amount he collateralized
-
+            sellerPayoff = order.amount - payout;
+            buyerPayoff = order.amount + payout;
         }
         // transfer payoff to seller
         usdc.transfer(order.seller, sellerPayoff);
@@ -125,7 +125,6 @@ contract Orders {
     /// @notice Returns current correlation
     function getCorrelationRate() public returns (uint256 value) {
         // gets current correlation
-        // returns difference
         value = 8; // Not real code, just there for testing until we implement this function
     }
 }
