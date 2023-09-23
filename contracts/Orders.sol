@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import "./CircularBufferLib.sol";
 import "hardhat/console.sol";
 
 
@@ -9,6 +11,7 @@ import "hardhat/console.sol";
 /// @author Correlatzia team
 /// @notice This contract can be use to perform correlation swaps on chain
 contract Orders {
+    using CircularBufferLib for CircularBufferLib.Buffer;
     struct Deposit {
         uint256 balance;
         uint256 strike;
@@ -21,6 +24,10 @@ contract Orders {
         uint256 maturity;
         bool active;
     }
+
+    CircularBufferLib.Buffer private priceDifferences;
+    AggregatorV3Interface public immutable priceFeedBTC;
+    AggregatorV3Interface public immutable priceFeedETH;
     // Unalocated balance, can be use to set an order
     mapping(address => Deposit) public balances;
     // saves the orders for a buyer
@@ -34,8 +41,10 @@ contract Orders {
     event NewDeposit(address indexed seller, uint256 amount, uint256 strike);
     event WithdrawFunds(address indexed seller, uint256 amount);
 
-    constructor(address _usdc) {
+    constructor(address _usdc, address aggregatorBTC, address aggregatorETH) {
         usdc = IERC20(_usdc);
+        priceFeedBTC = AggregatorV3Interface(aggregatorBTC);
+        priceFeedETH = AggregatorV3Interface(aggregatorETH);
     }
 
     /// @notice Returns amount and seller for specific order
@@ -129,5 +138,19 @@ contract Orders {
     function getCorrelationRate() public returns (uint256 value) {
         // gets current correlation
         value = 12; // Not real code, just there for testing until we implement this function
+    }
+
+    /// @notice Update price difference for the day
+    function updatePriceRing() external {
+        (uint256 btc, uint256 eth) = getLatestPrice();
+        priceDifferences.push(btc - eth);
+    }
+
+    /// @notice Gets the USDC price for BTC and ETH
+    function getLatestPrice() public view returns (uint256 btc, uint256 eth) {
+        (, int256 priceBTC, , , ) = priceFeedBTC.latestRoundData();
+        (, int256 priceETH, , , ) = priceFeedETH.latestRoundData();
+        btc = uint256(priceBTC);
+        eth = uint256(priceETH);
     }
 }
