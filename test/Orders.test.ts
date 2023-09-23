@@ -11,12 +11,14 @@ describe("Correlatzia", function () {
     let usdc: Contract;
     const initialAmount = 100;
     const strike = 10;
+    const sepoliaAggregatorETH = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419";//ETC / USD pool
+    const sepoliaAggregatorBTC = "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c";//ETC / USD pool
     this.beforeEach(async () => {
         // seller1 is default signer
         [seller1, buyer, seller2] = await ethers.getSigners();
         // Deploy contracts
         usdc = await ethers.deployContract("USDC");// for the test we are deploying our own but for testing in the network we will use the real address
-        instance = await ethers.deployContract("Orders", [await usdc.getAddress()]);
+        instance = await ethers.deployContract("Orders", [await usdc.getAddress(), sepoliaAggregatorBTC, sepoliaAggregatorETH ]);
         instanceAddress = await instance.getAddress();
 
         await usdc.mint(seller1.address, initialAmount);
