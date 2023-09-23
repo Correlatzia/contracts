@@ -120,7 +120,7 @@ contract Orders {
         // transfer payoff to seller
         usdc.transfer(order.seller, sellerPayoff);
         // transfer payoff to buyer
-        usdc.transfer(msg.sender, order.amount - buyerPayoff);
+        usdc.transfer(msg.sender,  buyerPayoff);
         
     }
 
