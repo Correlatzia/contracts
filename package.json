@@ -4,7 +4,7 @@
   "description": "A correlation swap mechanism",
   "main": "n",
   "scripts": {
-    "test": "test"
+    "test": "npx hardhat test"
   },
   "repository": {
     "type": "git",
@@ -24,5 +24,8 @@
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.2",
     "@nomicfoundation/hardhat-toolbox": "^3.0.0",
     "hardhat": "^2.17.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.3"
   }
 }
