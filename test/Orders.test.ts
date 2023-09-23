@@ -9,6 +9,7 @@ describe("Correlatzia", function () {
     let instanceAddress: string;
     let usdc: Contract;
     const initialAmount = 100;
+    const strike = 1;
     this.beforeEach(async () => {
         // seller1 is default signer
         [seller1, buyer, seller2] = await ethers.getSigners();
@@ -24,16 +25,16 @@ describe("Correlatzia", function () {
     it("User can deposit funds", async () => {
         await usdc.approve(instanceAddress, initialAmount);
 
-        await instance.deposit();
+        await instance.deposit(strike);
 
         expect(await usdc.balanceOf(instanceAddress)).to.be.eq(initialAmount);
-        expect(await instance.balances(seller1.address)).to.be.eq(initialAmount);
+        expect(await instance.getBalance(seller1.address)).to.be.eq(initialAmount);
     });
 
 
     it("User must approve before deposit", async () => {
 
-        await expect(instance.deposit()).to.be.reverted;
+        await expect(instance.deposit(strike)).to.be.reverted;
 
         expect(await usdc.balanceOf(seller1.address)).to.be.eq(initialAmount);
     });
@@ -43,20 +44,20 @@ describe("Correlatzia", function () {
         // deposit
         await usdc.approve(instanceAddress, initialAmount);
 
-        await instance.deposit();
+        await instance.deposit(strike);
 
         const halfAmount = initialAmount / 2;
         // partial withdraw
         await instance.withdrawFunds(halfAmount);
 
         expect(await usdc.balanceOf(seller1.address)).to.be.eq(halfAmount);
-        expect(await instance.balances(seller1.address)).to.be.eq(halfAmount);
+        expect(await instance.getBalance(seller1.address)).to.be.eq(halfAmount);
 
         // total withdraw
         await instance.withdrawFunds(halfAmount);
 
         expect(await usdc.balanceOf(seller1.address)).to.be.eq(initialAmount);
-        expect(await instance.balances(seller1.address)).to.be.eq(0);
+        expect(await instance.getBalance(seller1.address)).to.be.eq(0);
     });
 
     it("User can request to buy from another", async () => {
@@ -65,45 +66,45 @@ describe("Correlatzia", function () {
         // seller 1 deposits
         await usdc.approve(instanceAddress, initialAmount);
 
-        await instance.deposit();
+        await instance.deposit(strike);
 
         // seller 2 deposits
         await usdc.connect(seller2).approve(instanceAddress, initialAmount);
 
-        await instance.connect(seller2).deposit();
+        await instance.connect(seller2).deposit(strike);
 
         // buyer place order for seller 1
-        await instance.connect(buyer).buy(initialAmount, seller1.address);
+        await instance.connect(buyer).buy(initialAmount, seller1.address, {value: strike});
         const [oAmount1, oSeller1] = await instance.connect(buyer).getOrder(0);
         expect(oAmount1).to.be.eq(initialAmount);
         expect(oSeller1).to.be.eq(seller1.address);
-        expect(await instance.balances(seller1.address)).to.be.eq(0);
+        expect(await instance.getBalance(seller1.address)).to.be.eq(0);
 
         // buyer place order for seller 2
-        await instance.connect(buyer).buy(initialAmount, seller2.address);
+        await instance.connect(buyer).buy(initialAmount, seller2.address, {value: strike});
         const [oAmount2, oSeller2] = await instance.connect(buyer).getOrder(1);
         expect(oAmount2).to.be.eq(initialAmount);
         expect(oSeller2).to.be.eq(seller2.address);
-        expect(await instance.balances(seller1.address)).to.be.eq(0);
+        expect(await instance.getBalance(seller1.address)).to.be.eq(0);
     });
 
     it("Buyer can redeem the order after maturity", async () => {
         await usdc.approve(instanceAddress, initialAmount);
 
-        await instance.deposit();
+        await instance.deposit(strike);
 
 
         // buyer place order for seller 1
-        await instance.connect(buyer).buy(initialAmount, seller1.address);
+        await instance.connect(buyer).buy(initialAmount, seller1.address, {value: strike});
         
         await expect(instance.connect(buyer).withdrawAtMaturity(0)).to.be.revertedWith("Maturity not reached yet");
         const newTimestamp = (await ethers.provider.getBlock("latest"))!.timestamp + (30 * 24 * 60 * 60);
         await time.increaseTo(newTimestamp);
-
+        // buyer redeems order
         const prevBalance = await ethers.provider.getBalance(seller1.address);
         await instance.connect(buyer).withdrawAtMaturity(0);
 
-        expect(await ethers.provider.getBalance(seller1.address)).to.be.eq(prevBalance);
+        expect(await ethers.provider.getBalance(seller1.address)).to.be.gt(prevBalance);
         expect(await usdc.balanceOf(buyer.address)).to.be.eq(initialAmount);
 
         await expect(instance.connect(buyer).withdrawAtMaturity(0)).to.be.revertedWith("Order already redeemed");

@@ -9,6 +9,11 @@ import "hardhat/console.sol";
 /// @author Correlatzia team
 /// @notice This contract can be use to perform correlation swaps on chain
 contract Orders {// TBD set the right name
+    struct Deposit {
+        uint256 balance;
+        uint256 strike;
+    }
+
     struct Order {
         address seller;
         uint256 amount;
@@ -17,7 +22,7 @@ contract Orders {// TBD set the right name
         bool active;
     }
     // Unalocated balance, can be use to set an order
-    mapping(address => uint256) public balances;
+    mapping(address => Deposit) public balances;
     // saves the orders for a buyer
     mapping(address => Order[]) public orders; //TBD can i avoid using an array here?
 
@@ -36,13 +41,21 @@ contract Orders {// TBD set the right name
         seller = order.seller;
     }
 
+    /// @notice Returns amount and seller for specific order
+    function getBalance(address seller) view external returns(uint256 amount) {
+        Deposit memory info = balances[seller];
+        amount = info.balance;
+    }
+
     /// @notice Allows users to deposit USDC for a buyer to buy. Uses the allowance to get the deposit amount
-    function deposit() external {
+    /// @param strike the sellers accepted future strike calculation
+    function deposit(uint256 strike) external {
         uint256 amount = usdc.allowance(msg.sender, address(this));
         require(amount > 0);
         require(usdc.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         // TBD protect from overflow
-        balances[msg.sender] += amount;
+        balances[msg.sender].balance += amount;
+        balances[msg.sender].strike = strike;
     }
 
     /// @notice Allows buyer to buy a position from available balances
@@ -50,23 +63,22 @@ contract Orders {// TBD set the right name
     /// @param seller address of seller with enough liquidity
     function buy(uint256 amount, address seller) external payable {
         require(amount > 0, "Invalid amount");
-        uint256 balanceAmount = balances[seller];
-        require(balanceAmount >= amount, "Invalid seller amount");
-        uint256 fixedP = getRate();
-        require(msg.value >= fixedP, "Not enough ETH");
-        Order memory order = Order(seller, amount, fixedP, block.timestamp + maturity, true);
+        Deposit memory _deposit = balances[seller];
+        require(_deposit.balance >= amount, "Invalid seller amount");
+        require(msg.value >= _deposit.strike, "Not enough funds send");
+        Order memory order = Order(seller, amount, _deposit.strike, block.timestamp + maturity, true);
         
-        balances[seller] = balanceAmount - amount;
+        balances[seller].balance = _deposit.balance - amount;
         orders[msg.sender].push(order);
     }
 
     /// @notice Allows user to withdraw from their unlocked balance
     /// @param amount amount of usdc tokens to withdraw
     function withdrawFunds(uint256 amount) external {
-        uint256 balanceAmount = balances[msg.sender];
+        uint256 balanceAmount = balances[msg.sender].balance;
         require(balanceAmount >= amount, "Not enough ablance");
 
-        balances[msg.sender] = balanceAmount - amount;
+        balances[msg.sender].balance = balanceAmount - amount;
         usdc.transfer(msg.sender, amount);
     }
 
@@ -85,7 +97,7 @@ contract Orders {// TBD set the right name
         
     }
 
-    /// @notice computes the fixed p based on the correlated asset
+    /// @notice computes the expected strike based on the historical correlation data
     function getRate() internal returns (uint256 value) {
         //TBD when this is ready add msg.value test for buy function
     }
