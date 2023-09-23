@@ -3,16 +3,21 @@ pragma solidity ^0.8.0;
 
 // CircularBuffer Library
 library CircularBufferLib {
-    constant uint256 ONE_HUNDRED = 100; // max 99 safe values
+    uint256 constant ONE_HUNDRED = 100; // max 99 safe values
+
+    struct TokenPrices {
+        uint128 a;
+        uint128 b;
+    }
 
     struct Buffer {
-        uint256[ONE_HUNDRED] data;
+        TokenPrices[ONE_HUNDRED] prices;
         uint256 head;
         uint256 tail;
     }
 
-    function push(Buffer storage buf, uint256 value) internal {
-        buf.data[buf.tail] = value;
+    function push(Buffer storage buf, uint128 aValue, uint128 bValue) internal {
+        buf.prices[buf.tail] = TokenPrices(aValue, bValue);
         buf.tail = (buf.tail + 1) % ONE_HUNDRED;
 
         if (buf.tail == buf.head) {
@@ -22,27 +27,25 @@ library CircularBufferLib {
 
     function getOrderedBuffer(
         Buffer storage buf
-    ) internal view returns (uint256[] memory) {
-        uint256[] memory ordered = new uint256[ONE_HUNDRED];
+    ) internal view returns (TokenPrices[] memory) {
+        uint256 availableValues = buf.tail >= buf.head
+            ? buf.tail - buf.head
+            : 100 + buf.tail - buf.head;
+        TokenPrices[] memory ordered = new TokenPrices[](availableValues);
         uint256 count = 0;
 
-        for (uint256 i = buf.head; i != buf.tail; i = (i + 1) % ONE_HUNDRED) {
-            ordered[count] = buf.data[i];
+        for (uint256 i = buf.head; count < availableValues; i = (i + 1) % 100) {
+            ordered[count] = buf.prices[i];
             count++;
         }
 
-        uint256[] memory trimmed = new uint256[count];
-        for (uint256 j = 0; j < count; j++) {
-            trimmed[j] = ordered[j];
-        }
-
-        return trimmed;
+        return ordered;
     }
 
     function getLatestNValues(
         Buffer storage buf,
         uint256 n
-    ) internal view returns (uint256[] memory) {
+    ) internal view returns (TokenPrices[] memory) {
         if (n > ONE_HUNDRED - 1) n = ONE_HUNDRED - 1; // Limit to max safe size
 
         uint256 availableValues = buf.tail >= buf.head
@@ -52,14 +55,14 @@ library CircularBufferLib {
         // Determine the number of values to retrieve
         uint256 valuesToRetrieve = n < availableValues ? n : availableValues;
 
-        uint256[] memory latestValues = new uint256[valuesToRetrieve];
+        TokenPrices[] memory latestValues = new TokenPrices[](valuesToRetrieve);
         uint256 count = 0;
 
         int256 index = int256(buf.tail) - 1; // Start from tail and move backward
 
         while (count < valuesToRetrieve) {
-            if (index < 0) index = ONE_HUNDRED - 1; // Wrap around if negative
-            latestValues[count] = buf.data[uint256(index)];
+            if (index < 0) index = int256(ONE_HUNDRED - 1); // Wrap around if negative
+            latestValues[count] = buf.prices[uint256(index)];
             count++;
             index--;
         }
