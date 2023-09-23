@@ -107,6 +107,7 @@ contract Orders {
         uint256 newStrike = getCorrelationRate();
         uint256 sellerPayoff;
         uint256 buyerPayoff; 
+        console.log(newStrike, order.strike);
         uint256 payout = order.amount * (newStrike - order.strike);
         if (order.strike < newStrike) {
             // if correlation was stronger the payout goes to the seller + the amount
@@ -127,6 +128,6 @@ contract Orders {
     /// @notice Returns current correlation
     function getCorrelationRate() public returns (uint256 value) {
         // gets current correlation
-        value = 8; // Not real code, just there for testing until we implement this function
+        value = 12; // Not real code, just there for testing until we implement this function
     }
 }
