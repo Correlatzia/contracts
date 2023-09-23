@@ -7,3 +7,4 @@ This is a project for the ETH Global NY Hackaton 2023. Where all the contracts d
 - [ ] Connect with Scroll
 - [ ] Add needed events
 - [ ] create script to test workflow in a fork using the real usdc address
+- [ ] do a final audit

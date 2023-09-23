@@ -11,11 +11,10 @@ import "hardhat/console.sol";
 contract Orders {// TBD set the right name
     struct Order {
         address seller;
-        address buyer;
         uint256 amount;
         uint256 fixedP;
         uint256 maturity;
-        bool collected;
+        bool active;
     }
     // Unalocated balance, can be use to set an order
     mapping(address => uint256) public balances;
@@ -55,11 +54,10 @@ contract Orders {// TBD set the right name
         require(balanceAmount >= amount, "Invalid seller amount");
         uint256 fixedP = getRate();
         require(msg.value >= fixedP, "Not enough ETH");
-        Order memory order = Order(seller, msg.sender, amount, fixedP, block.timestamp + maturity, false);
+        Order memory order = Order(seller, amount, fixedP, block.timestamp + maturity, true);
         
         balances[seller] = balanceAmount - amount;
         orders[msg.sender].push(order);
-        console.log(orders[msg.sender][0].buyer);
     }
 
     /// @notice Allows user to withdraw from their unlocked balance
@@ -76,10 +74,14 @@ contract Orders {// TBD set the right name
     /// @param index specifies the index of the order to redeem inside the order array for the buyer
     function withdrawAtMaturity(uint256 index) external {
         Order memory order = orders[msg.sender][index];
-
+        //TBD where do we compute the realized P?
         require(order.maturity <= block.timestamp, "Maturity not reached yet");
-        // transfer usdc
-        // transfer eth
+        require(order.active, "Order already redeemed");
+        orders[msg.sender][index].active = false;
+        // transfer usdc to buyer
+        usdc.transfer(msg.sender, order.amount);
+        // transfer eth to seller
+        require(payable(order.seller).send(order.fixedP), "Eth trasnfer failed");
         
     }
 

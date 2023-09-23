@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { Contract } from "hardhat/internal/hardhat-network/stack-traces/model";
-import { HardhatEthersHelpers } from "hardhat/types";
+import { time } from "@nomicfoundation/hardhat-network-helpers";
 
 describe("Correlatzia", function () {
     let buyer, seller1, seller2;
@@ -85,5 +85,27 @@ describe("Correlatzia", function () {
         expect(oAmount2).to.be.eq(initialAmount);
         expect(oSeller2).to.be.eq(seller2.address);
         expect(await instance.balances(seller1.address)).to.be.eq(0);
+    });
+
+    it("Buyer can redeem the order after maturity", async () => {
+        await usdc.approve(instanceAddress, initialAmount);
+
+        await instance.deposit();
+
+
+        // buyer place order for seller 1
+        await instance.connect(buyer).buy(initialAmount, seller1.address);
+        
+        await expect(instance.connect(buyer).withdrawAtMaturity(0)).to.be.revertedWith("Maturity not reached yet");
+        const newTimestamp = (await ethers.provider.getBlock("latest"))!.timestamp + (30 * 24 * 60 * 60);
+        await time.increaseTo(newTimestamp);
+
+        const prevBalance = await ethers.provider.getBalance(seller1.address);
+        await instance.connect(buyer).withdrawAtMaturity(0);
+
+        expect(await ethers.provider.getBalance(seller1.address)).to.be.eq(prevBalance);
+        expect(await usdc.balanceOf(buyer.address)).to.be.eq(initialAmount);
+
+        await expect(instance.connect(buyer).withdrawAtMaturity(0)).to.be.revertedWith("Order already redeemed");
     });
 });
