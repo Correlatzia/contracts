@@ -1,0 +1,28 @@
+{
+  "name": "correlatzia",
+  "version": "1.0.0",
+  "description": "A correlation swap mechanism",
+  "main": "n",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Correlatzia/contracts.git"
+  },
+  "keywords": [
+    "swap",
+    "crypto"
+  ],
+  "author": "Correlatzia Team",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Correlatzia/contracts/issues"
+  },
+  "homepage": "https://github.com/Correlatzia/contracts#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.2",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "hardhat": "^2.17.3"
+  }
+}
