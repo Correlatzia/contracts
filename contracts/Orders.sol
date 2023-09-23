@@ -30,6 +30,10 @@ contract Orders {// TBD set the right name
 
     uint256 immutable maturity = 30 days;
 
+    event PlaceOrder(address indexed seller, address indexed buyer, uint256 amount);
+    event NewDeposit(address indexed seller, uint256 amount, uint256 strike);
+    event WithdrawFunds(address indexed seller, uint256 amount);
+
     constructor(address _usdc) {
         usdc = IERC20(_usdc);
     }
@@ -56,20 +60,27 @@ contract Orders {// TBD set the right name
         // TBD protect from overflow
         balances[msg.sender].balance += amount;
         balances[msg.sender].strike = strike;
+
+        emit NewDeposit(msg.sender, amount, strike);
     }
 
     /// @notice Allows buyer to buy a position from available balances
     /// @param amount amount to be transfer at maturity
     /// @param seller address of seller with enough liquidity
-    function buy(uint256 amount, address seller) external payable {
+    function buy(uint256 amount, address seller) external {
         require(amount > 0, "Invalid amount");
         Deposit memory _deposit = balances[seller];
         require(_deposit.balance >= amount, "Invalid seller amount");
-        require(msg.value >= _deposit.strike, "Not enough funds send");
+        
+        require(usdc.allowance(msg.sender, address(this)) >= amount, "Not enough allowance");
+        require(usdc.transferFrom(msg.sender, address(this), amount));
+        
         Order memory order = Order(seller, amount, _deposit.strike, block.timestamp + maturity, true);
         
         balances[seller].balance = _deposit.balance - amount;
         orders[msg.sender].push(order);
+
+        emit PlaceOrder(seller, msg.sender, amount);
     }
 
     /// @notice Allows user to withdraw from their unlocked balance
@@ -80,25 +91,31 @@ contract Orders {// TBD set the right name
 
         balances[msg.sender].balance = balanceAmount - amount;
         usdc.transfer(msg.sender, amount);
+
+        emit WithdrawFunds(msg.sender, amount);
     }
 
     /// @notice allows a buyer to withdraw their order at maturity
     /// @param index specifies the index of the order to redeem inside the order array for the buyer
     function withdrawAtMaturity(uint256 index) external {
         Order memory order = orders[msg.sender][index];
-        //TBD where do we compute the realized P?
+        
         require(order.maturity <= block.timestamp, "Maturity not reached yet");
         require(order.active, "Order already redeemed");
         orders[msg.sender][index].active = false;
+
+        uint256 sellerPayoff;
+        uint256 buyerPayoff;
         // transfer usdc to buyer
         usdc.transfer(msg.sender, order.amount);
         // transfer eth to seller
-        require(payable(order.seller).send(order.fixedP), "Eth trasnfer failed");
+        //require(payable(order.seller).send(order.fixedP), "Eth trasnfer failed");
         
     }
 
-    /// @notice computes the expected strike based on the historical correlation data
-    function getRate() internal returns (uint256 value) {
+    /// @notice computes the expected strike based on the correlation data
+    /// @param notional given in usdc
+    function getRate(uint256 notional) internal returns (uint256 value) {
         //TBD when this is ready add msg.value test for buy function
     }
 }

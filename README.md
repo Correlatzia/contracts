@@ -8,3 +8,8 @@ This is a project for the ETH Global NY Hackaton 2023. Where all the contracts d
 - [ ] Add needed events
 - [ ] create script to test workflow in a fork using the real usdc address
 - [ ] do a final audit
+
+## Quickstart
+1. Clone the project.
+2. Run `npm i`.
+3. Run `npm test`. All test should pass!
