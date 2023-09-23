@@ -10,7 +10,7 @@ describe("Correlatzia", function () {
     let instanceAddress: string;
     let usdc: Contract;
     const initialAmount = 100;
-    const strike = 1;
+    const strike = 10;
     this.beforeEach(async () => {
         // seller1 is default signer
         [seller1, buyer, seller2] = await ethers.getSigners();
