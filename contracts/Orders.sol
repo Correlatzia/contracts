@@ -4,6 +4,7 @@ pragma solidity 0.8.19;
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import {MainDemoConsumerBase} from "@redstone-finance/evm-connector/contracts/data-services/MainDemoConsumerBase.sol";
 import "./CircularBufferLib.sol";
+import "./NumericalMethods.sol";
 import "hardhat/console.sol";
 
 /// @title Correlation Swaps
@@ -11,6 +12,8 @@ import "hardhat/console.sol";
 /// @notice This contract can be use to perform correlation swaps on chain
 contract Orders is MainDemoConsumerBase {
     using CircularBufferLib for CircularBufferLib.Buffer;
+    using CircularBufferLib for CircularBufferLib.TokenPrices;
+    using NumericalMethods for uint256[];
 
     struct PriceDiff {
         uint128 tokenAPrice;
@@ -506,8 +509,17 @@ contract Orders is MainDemoConsumerBase {
     function getCorrelationRate(
         bytes32 key
     ) public view returns (int128 value) {
-        // gets current correlation
-        value = 8000; // Not real code, just there for testing until we implement this function
+        // gather info rings
+        uint256 n = 5;
+        CircularBufferLib.TokenPrices[] memory prices = priceDifferences[key].getLatestNValues(n);
+        uint256[] memory x;
+        uint256[] memory y;
+        for (uint256 i = 0; i < n ; i++) {
+            x[i] = uint256(prices[i].a);
+            y[i] = uint256(prices[i].b);
+        }
+        // compute correlation
+        value = x.getCorrelation(y); // Not real code, just there for testing until we implement this function
     }
 
     /// @notice Update price difference for the day

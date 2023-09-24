@@ -20,16 +20,16 @@ library NumericalMethods {
         }
     }
 
-    function getCorrelation(uint256[] memory x, uint256[] memory y) internal pure returns (uint256 corr){
+    function getCorrelation(uint256[] memory x, uint256[] memory y) internal pure returns (int128 corr){
         uint256 numerator = getCovariance(x, y);
         uint256 denominator = getVariance(x) * getVariance(y);
 
         corr = numerator / denominator;
     }
 
-    function getCovariance(uint256[] memory x, uint256[] memory y) internal pure returns (uint256 covariance){
+    function getCovariance(uint256[] memory x, uint256[] memory y) internal pure returns (int128 covariance){
         require(x.length == y.length);
-        uint256 n = x.length;
+        int128 n = int128(x.length);
         // Step 1: Calculate the means (μX and μY) for X and Y:
         uint256 meanX = getMean(x);
         uint256 meanY = getMean(y);
@@ -44,7 +44,7 @@ library NumericalMethods {
 
     }
 
-    function getVariance(uint256[] memory data) pure internal returns (uint256){
+    function getVariance(uint256[] memory data) pure internal returns (int128) {
         require(data.length > 1, "Input array must contain at least 2 elements");
 
         // Step 1: Calculate the mean (average) of the data
