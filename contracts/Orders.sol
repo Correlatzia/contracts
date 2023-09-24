@@ -253,7 +253,14 @@ contract Orders is MainDemoConsumerBase {
         // emit PlaceOrder(seller, msg.sender, amount);
     }
 
-    function _take(bool isUp, OpenOrdersMarket storage oO, uint256 notional, MatchedOrdersMarket storage mm, bytes32 key, uint256 margin) internal {
+    function _take(
+        bool isUp,
+        OpenOrdersMarket storage oO,
+        uint256 notional,
+        MatchedOrdersMarket storage mm,
+        bytes32 key,
+        uint256 margin
+    ) internal {
         (int128 corr, uint128 nonce) = executeLatestCorrelation(key);
         uint256 idx = 0;
         uint256 pool;
@@ -342,7 +349,6 @@ contract Orders is MainDemoConsumerBase {
             }
             mm.downPositions.push(dPos);
             mm.downPositionIndex[msg.sender] = mm.upPositions.length - 1;
-        
         } else {
             if (isFullyMatched) {
                 oO.notionalDownPool -= notional;
@@ -405,16 +411,17 @@ contract Orders is MainDemoConsumerBase {
             MatchedOrder memory dPos;
 
             if (isFullyMatched) {
-                oO.notionalDownPool -= notional;
-                delete oO.downOffers[oO.downOfferIndex[msg.sender]];
-                oO.downOfferIndex[msg.sender] = 0;
+                oO.notionalUpPool -= notional;
+                delete oO.upOffers[oO.upOfferIndex[msg.sender]];
+                oO.upOfferIndex[msg.sender] = 0;
                 dPos = MatchedOrder(msg.sender, notional, margin, corr, nonce);
             } else {
                 uint256 notionalFilled = notional - notionalRemaining;
 
-                oO.downOffers[oO.downOfferIndex[msg.sender]]
+                oO
+                    .upOffers[oO.upOfferIndex[msg.sender]]
                     .notional -= notionalFilled;
-                oO.notionalDownPool -= notionalFilled;
+                oO.notionalUpPool -= notionalFilled;
                 dPos = MatchedOrder(
                     msg.sender,
                     notionalFilled,
@@ -423,8 +430,8 @@ contract Orders is MainDemoConsumerBase {
                     nonce
                 );
             }
-            mm.downPositions.push(dPos);
-            mm.downPositionIndex[msg.sender] = mm.downPositions.length - 1;
+            mm.upPositions.push(dPos);
+            mm.upPositionIndex[msg.sender] = mm.upPositions.length - 1;
         }
     }
 
@@ -462,7 +469,7 @@ contract Orders is MainDemoConsumerBase {
         bytes32 pair,
         bytes32[] calldata symbols
     ) external {
-        // TODO: 
+        // TODO:
         // update only after 24hrs is passed check var
         require(lastCorrelationUpdate + 1 days <= block.timestamp);
         lastCorrelationUpdate = block.timestamp;
@@ -511,10 +518,11 @@ contract Orders is MainDemoConsumerBase {
     ) public view returns (int128 value) {
         // gather info rings
         uint256 n = 5;
-        CircularBufferLib.TokenPrices[] memory prices = priceDifferences[key].getLatestNValues(n);
+        CircularBufferLib.TokenPrices[] memory prices = priceDifferences[key]
+            .getLatestNValues(n);
         uint256[] memory x;
         uint256[] memory y;
-        for (uint256 i = 0; i < n ; i++) {
+        for (uint256 i = 0; i < n; i++) {
             x[i] = uint256(prices[i].a);
             y[i] = uint256(prices[i].b);
         }
