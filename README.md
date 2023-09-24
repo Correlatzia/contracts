@@ -13,3 +13,6 @@ This is a project for the ETH Global NY Hackaton 2023. Where all the contracts d
 1. Clone the project.
 2. Run `npm i`.
 3. Run `npm test`. All test should pass!
+
+## Verified contract
+[Explorer](https://sepolia-blockscout.scroll.io/address/0x99045B27567Ba32FC5dDCe85B5bf338B42aa4019#code)
