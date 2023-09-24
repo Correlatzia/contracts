@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
-import "@redstone-finance/evm-connector/contracts/data-services/MainDemoConsumerBase.sol";
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
+import {MainDemoConsumerBase} from "@redstone-finance/evm-connector/contracts/data-services/MainDemoConsumerBase.sol";
 import "./CircularBufferLib.sol";
 import "hardhat/console.sol";
 
@@ -22,23 +22,33 @@ contract Orders is MainDemoConsumerBase {
         uint256 nonce;
     }
 
-    struct OpenOrdersMarket {
-        uint256 totalNotionalUp;
-        uint256 totalNotionalDown;
-        Side[] upOffers;
-        Side[] downOffers;
+    struct OpenOrder {
+        address user;
+        uint256 notional;
+        uint256 margin;
     }
 
-    struct Side {
+    struct MatchedOrder {
+        address user;
         uint256 notional;
         uint256 posted;
+        uint256 lastCorrelation;
         uint256 updateNonce;
+    }
+
+    struct OpenOrdersMarket {
+        uint256 notionalUpPool;
+        uint256 notionalDownPool;
+        mapping(address => uint256) upOfferIndex;
+        mapping(address => uint256) downOfferIndex;
+        OpenOrder[] upOffers;
+        OpenOrder[] downOffers;
     }
 
     struct MatchedOrdersMarket {
         uint256 totalNotional;
-        Side[] up;
-        Side[] down;
+        MatchedOrder[] upPositions;
+        MatchedOrder[] downPositions;
         int256 rebalanceAmount;
         uint256 settlementDate;
     }
@@ -48,13 +58,9 @@ contract Orders is MainDemoConsumerBase {
         uint64[] marginCallDowns;
     }
 
-    struct Order {
-        address seller;
-        uint256 amount;
-        uint256 strike;
-        uint256 maturity;
-        bool active;
-    }
+    uint256 constant ARITH_FACTOR = 1e6;
+    uint256 constant MARGIN_FACTOR = 30; // in "percent"
+    uint256 constant maturity = 30 days;
 
     // keys are pair in bytes32
     mapping(bytes32 => CircularBufferLib.Buffer) private priceDifferences;
@@ -65,31 +71,64 @@ contract Orders is MainDemoConsumerBase {
     // Unalocated balance, can be use to set an order
     mapping(address => uint256) public balances;
     // saves the orders for a buyer
-    mapping(address => Order[]) public orders; //TBD can i avoid using an array here?
 
     IERC20 public usdc;
-
-    uint256 immutable maturity = 30 days;
 
     event PlaceOrder(
         address indexed seller,
         address indexed buyer,
         uint256 amount
     );
-    event NewDeposit(address indexed seller, uint256 amount, uint256 strike);
+    event NewDeposit(address indexed seller, uint256 amount);
     event WithdrawFunds(address indexed seller, uint256 amount);
+
+    // takeOffer(notional, marginAmount) -> getLatestCorrelation, update lastCorrelation and pairNonce
+    // updateCorr(pair) -> correlationData[pair] latest correlations and ++correlationNonce
+    // notifyMarginCall(pair, isUp, idx) -> marginList[pair] push to marginCallUps or marginCallDowns
 
     constructor(address _usdc, address aggregatorBTC, address aggregatorETH) {
         usdc = IERC20(_usdc);
     }
 
-    /// @notice Returns amount and seller for specific order
     function getOrder(
-        uint256 index
-    ) external view returns (uint256 amount, address seller) {
-        Order memory order = orders[msg.sender][index];
-        amount = order.amount;
-        seller = order.seller;
+        address user,
+        bytes32 pair,
+        bool isUp
+    ) external view returns (uint256 notional, uint256 posted) {
+        OpenOrder memory order;
+
+        if (isUp) {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[user]
+            ];
+        } else {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[user]
+            ];
+        }
+        notional = order.notional;
+        posted = order.margin;
+    }
+
+    function modifyOrder(
+        address user,
+        bytes32 pair,
+        bool isUp,
+        OpenOrder calldata updatedOrder
+    ) external returns (uint256 notional, uint256 posted) {
+        OpenOrder storage order;
+
+        if (isUp) {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[user]
+            ];
+        } else {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[user]
+            ];
+        }
+        order.notional = updatedOrder.notional;
+        order.margin = updatedOrder.margin;
     }
 
     /// @notice Returns amount and seller for specific order
@@ -97,10 +136,7 @@ contract Orders is MainDemoConsumerBase {
         amount = balances[seller];
     }
 
-    /// @notice Allows users to deposit USDC for a buyer to buy. Uses the allowance to get the deposit amount
-    /// @param strike the sellers accepted future strike calculation
-    function deposit(uint256 strike) external {
-        uint256 amount = usdc.allowance(msg.sender, address(this));
+    function deposit(uint256 amount) external {
         require(amount > 0);
         require(
             usdc.transferFrom(msg.sender, address(this), amount),
@@ -109,87 +145,182 @@ contract Orders is MainDemoConsumerBase {
         // TBD protect from overflow
         balances[msg.sender] += amount;
 
-        emit NewDeposit(msg.sender, amount, strike);
+        emit NewDeposit(msg.sender, amount);
     }
 
-    /// @notice Allows buyer to buy a position from available balances
-    /// @param amount amount to be transfer at maturity
-    /// @param seller address of seller with enough liquidity
-    function buy(uint256 amount, address seller) external {
-        require(amount > 0, "Invalid amount");
-        uint256 _deposit = balances[seller];
-        require(_deposit >= amount, "Invalid seller amount");
+    function take(
+        bytes32[] calldata symbols, // can use pair key, but in future use to calculate uptodate corr
+        bool isUp,
+        uint256 notional,
+        uint256 margin
+    ) external {
+        require(notional > 0, "notional must be gt 0");
+        require(margin > 0, "margin must be gt 0");
+        require(margin <= notional, "margin gt notional");
+
+        uint256 _deposit = balances[msg.sender];
+        require(_deposit >= margin, "insufficient balance");
+
+        balances[msg.sender] -= margin;
+
+        //   struct OpenOrdersMarket {
+        //     uint256 notionalUpPool;
+        //     uint256 notionalDownPool;
+        //     mapping(address => uint256) upOfferIndex;
+        //     mapping(address => uint256) downOfferIndex;
+        //     OpenOrder[] upOffers;
+        //     OpenOrder[] downOffers;
+        // }
 
         require(
-            usdc.allowance(msg.sender, address(this)) >= amount,
-            "Not enough allowance"
+            (margin * 100 * ARITH_FACTOR) / notional > margin * ARITH_FACTOR,
+            "must be above margin level"
         );
-        require(usdc.transferFrom(msg.sender, address(this), amount));
 
-        // Order memory order = Order(
-        //     seller,
-        //     amount,
-        //     block.timestamp + maturity,
-        //     true
-        // );
+        bytes32 key = keccak256(abi.encodePacked(symbols[0], "/", symbols[1]));
 
-        balances[seller] = _deposit - amount;
-        // orders[msg.sender].push(order);
+        OpenOrdersMarket storage oo = openOrders[key];
 
-        emit PlaceOrder(seller, msg.sender, amount);
+        if (!isUp) {
+            uint256 upPool = oo.notionalUpPool;
+            require(upPool > 0, "up pool is zero");
+            bool isFullyMatched = notional < upPool;
+
+            if (isFullyMatched) {
+                oo.notionalUpPool -= notional;
+            } else {
+                oo.notionalUpPool = 0;
+            }
+
+            OpenOrder[] storage upOffers = oo.upOffers;
+
+            uint256 idx = 0;
+
+            // struct MatchedOrdersMarket {
+            //         uint256 totalNotional;
+            //         MatchedOrder[] upPositions;
+            //         MatchedOrder[] downPositions;
+            //         int256 rebalanceAmount;
+            //         uint256 settlementDate;
+            // }
+
+            MatchedOrdersMarket storage mm = matchedOrders[key];
+            if (mm.settlementDate == 0) {
+                // refine this later
+                mm.settlementDate = block.timestamp + 30 days;
+            }
+            mm.totalNotional += notional;
+
+            (uint256 corr, uint nonce) = executeLatestCorrelation(key);
+
+            uint256 notionalRemaining = notional;
+            while (true) {
+                OpenOrder memory upOffer = upOffers[idx];
+
+                uint256 upOfferNotional = upOffer.notional;
+
+                if (upOfferNotional < notionalRemaining) {
+                    mm.upPositions.push(
+                        MatchedOrder(
+                            upOffer.user,
+                            upOfferNotional,
+                            upOffer.margin,
+                            corr,
+                            nonce
+                        )
+                    );
+                    notionalRemaining -= upOfferNotional;
+
+                    delete upOffers[idx];
+                    oo.upOfferIndex[upOffer.user] = 0;
+                } else {
+                    notionalRemaining = 0;
+                    upOffers[idx].notional -= notional;
+                    oo.upOfferIndex[upOffer.user] = 0;
+
+                    break;
+                }
+            }
+
+            MatchedOrder memory dPos;
+
+            if (isFullyMatched) {
+                oo.notionalDownPool -= notional;
+                dPos = MatchedOrder(msg.sender, notional, margin, corr, nonce);
+            } else {
+                uint256 notionalFilled = notional;
+
+                oo.notionalDownPool -= notionalFilled;
+                dPos = MatchedOrder(
+                    msg.sender,
+                    notionalFilled,
+                    margin,
+                    corr,
+                    nonce
+                );
+            }
+            mm.downPositions.push(dPos);
+        } else {}
+
+        // emit PlaceOrder(seller, msg.sender, amount);
     }
 
     /// @notice Allows user to withdraw from their unlocked balance
     /// @param amount amount of usdc tokens to withdraw
-    function withdrawFunds(uint256 amount) external {
-        uint256 balanceAmount = balances[msg.sender];
-        require(balanceAmount >= amount, "Not enough ablance");
+    // function withdrawFunds(uint256 amount) external {
+    //     uint256 balanceAmount = balances[msg.sender];
+    //     require(balanceAmount >= amount, "Not enough ablance");
 
-        balances[msg.sender] = balanceAmount - amount;
-        usdc.transfer(msg.sender, amount);
+    //     balances[msg.sender] = balanceAmount - amount;
+    //     usdc.transfer(msg.sender, amount);
 
-        emit WithdrawFunds(msg.sender, amount);
-    }
+    //     emit WithdrawFunds(msg.sender, amount);
+    // }
 
-    /// @notice allows a buyer to withdraw their order at maturity
-    /// @param index specifies the index of the order to redeem inside the order array for the buyer
-    function withdrawAtMaturity(uint256 index) external {
-        Order memory order = orders[msg.sender][index];
+    // /// @notice allows a buyer to withdraw their order at maturity
+    // /// @param index specifies the index of the order to redeem inside the order array for the buyer
+    // function withdrawAtMaturity(uint256 index) external {
+    //     OpenOrdersMarket memory order = openOrders[msg.sender][index];
 
-        require(order.maturity <= block.timestamp, "Maturity not reached yet");
-        require(order.active, "Order already redeemed");
-        orders[msg.sender][index].active = false;
+    //     require(order.maturity <= block.timestamp, "Maturity not reached yet");
+    //     require(order.active, "Order already redeemed");
+    //     openOrders[msg.sender][index].active = false;
 
-        uint256 newStrike = getCorrelationRate();
-        uint256 sellerPayoff;
-        uint256 buyerPayoff;
-        console.log(newStrike, order.strike);
-        uint256 payout = order.amount * (newStrike - order.strike);
-        if (order.strike < newStrike) {
-            // if correlation was stronger the payout goes to the seller + the amount
-            sellerPayoff = order.amount + payout;
-            buyerPayoff = order.amount - payout;
-        } else {
-            // if correlation was weaker the payout goes to the buyer + the amount he collateralized
-            sellerPayoff = order.amount - payout;
-            buyerPayoff = order.amount + payout;
-        }
-        // transfer payoff to seller
-        usdc.transfer(order.seller, sellerPayoff);
-        // transfer payoff to buyer
-        usdc.transfer(msg.sender, buyerPayoff);
-    }
+    //     uint256 newStrike = getCorrelationRate();
+    //     uint256 sellerPayoff;
+    //     uint256 buyerPayoff;
+    //     console.log(newStrike, order.strike);
+    //     uint256 payout = order.amount * (newStrike - order.strike);
+    //     if (order.strike < newStrike) {
+    //         // if correlation was stronger the payout goes to the seller + the amount
+    //         sellerPayoff = order.amount + payout;
+    //         buyerPayoff = order.amount - payout;
+    //     } else {
+    //         // if correlation was weaker the payout goes to the buyer + the amount he collateralized
+    //         sellerPayoff = order.amount - payout;
+    //         buyerPayoff = order.amount + payout;
+    //     }
+    //     // transfer payoff to seller
+    //     usdc.transfer(order.seller, sellerPayoff);
+    //     // transfer payoff to buyer
+    //     usdc.transfer(msg.sender, buyerPayoff);
+    // }
 
     /// @notice Returns current correlation
-    function getCorrelationRate() public view returns (uint256 value) {
+    function getCorrelationRate(
+        bytes32 key
+    ) public view returns (uint256 value) {
         // gets current correlation
-        value = 12; // Not real code, just there for testing until we implement this function
+        value = 8000; // Not real code, just there for testing until we implement this function
     }
 
     /// @notice Update price difference for the day
-    function updatePriceRing(bytes32[] calldata symbols) external {
+    function updatePriceRing(
+        bytes32 pairKey,
+        bytes32[] calldata symbols
+    ) external {
         (uint256 a, uint256 b) = getLatestPrice(symbols);
-        priceDifferences.push(uint128(a), uint128(b));
+        priceDifferences[pairKey].push(uint128(a), uint128(b));
     }
 
     /// @notice Gets the USDC price for BTC and ETH
@@ -202,5 +333,14 @@ contract Orders is MainDemoConsumerBase {
         uint256[] memory values = getOracleNumericValuesFromTxMsg(symbols);
         a = values[0];
         b = values[1];
+    }
+
+    function executeLatestCorrelation(
+        bytes32 key
+    ) private returns (uint256 corr, uint256 nonce) {
+        // TODO: calc correlation in basis points
+        corr = getCorrelationRate(key);
+        correlationData[key].lastCorrelation = corr;
+        nonce = ++correlationData[key].nonce;
     }
 }
