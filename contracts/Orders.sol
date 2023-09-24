@@ -18,8 +18,8 @@ contract Orders is MainDemoConsumerBase {
     }
 
     struct CorrelationData {
-        uint256 lastCorrelation;
-        uint256 nonce;
+        int128 lastCorrelation;
+        uint128 nonce;
     }
 
     struct OpenOrder {
@@ -32,8 +32,8 @@ contract Orders is MainDemoConsumerBase {
         address user;
         uint256 notional;
         uint256 posted;
-        uint256 lastCorrelation;
-        uint256 updateNonce;
+        int128 lastCorrelation;
+        uint128 updateNonce;
     }
 
     struct OpenOrdersMarket {
@@ -49,6 +49,8 @@ contract Orders is MainDemoConsumerBase {
         uint256 totalNotional;
         MatchedOrder[] upPositions;
         MatchedOrder[] downPositions;
+        mapping(address => uint256) upPositionIndex;
+        mapping(address => uint256) downPositionIndex;
         int256 rebalanceAmount;
         uint256 settlementDate;
     }
@@ -61,10 +63,11 @@ contract Orders is MainDemoConsumerBase {
     uint256 constant ARITH_FACTOR = 1e6;
     uint256 constant MARGIN_FACTOR = 30; // in "percent"
     uint256 constant maturity = 30 days;
+    uint256 public lastCorrelationUpdate = block.timestamp;
 
     // keys are pair in bytes32
     mapping(bytes32 => CircularBufferLib.Buffer) private priceDifferences;
-    mapping(bytes32 => CorrelationData) public correlationData;
+    mapping(bytes32 => CorrelationData) public correlationData; // corr is in basis points
     mapping(bytes32 => OpenOrdersMarket) public openOrders;
     mapping(bytes32 => MatchedOrdersMarket) public matchedOrders;
     mapping(bytes32 => MarginCallTracking) private marginCallTracking;
@@ -74,10 +77,11 @@ contract Orders is MainDemoConsumerBase {
 
     IERC20 public usdc;
 
-    event PlaceOrder(
-        address indexed seller,
-        address indexed buyer,
-        uint256 amount
+    event MakeOffer(
+        address indexed user,
+        bool isUp,
+        uint256 notional,
+        uint256 margin
     );
     event NewDeposit(address indexed seller, uint256 amount);
     event WithdrawFunds(address indexed seller, uint256 amount);
@@ -86,7 +90,7 @@ contract Orders is MainDemoConsumerBase {
     // updateCorr(pair) -> correlationData[pair] latest correlations and ++correlationNonce
     // notifyMarginCall(pair, isUp, idx) -> marginList[pair] push to marginCallUps or marginCallDowns
 
-    constructor(address _usdc, address aggregatorBTC, address aggregatorETH) {
+    constructor(address _usdc) {
         usdc = IERC20(_usdc);
     }
 
@@ -110,32 +114,6 @@ contract Orders is MainDemoConsumerBase {
         posted = order.margin;
     }
 
-    function modifyOrder(
-        address user,
-        bytes32 pair,
-        bool isUp,
-        OpenOrder calldata updatedOrder
-    ) external returns (uint256 notional, uint256 posted) {
-        OpenOrder storage order;
-
-        if (isUp) {
-            order = openOrders[pair].upOffers[
-                openOrders[pair].upOfferIndex[user]
-            ];
-        } else {
-            order = openOrders[pair].upOffers[
-                openOrders[pair].upOfferIndex[user]
-            ];
-        }
-        order.notional = updatedOrder.notional;
-        order.margin = updatedOrder.margin;
-    }
-
-    /// @notice Returns amount and seller for specific order
-    function getBalance(address seller) external view returns (uint256 amount) {
-        amount = balances[seller];
-    }
-
     function deposit(uint256 amount) external {
         require(amount > 0);
         require(
@@ -146,6 +124,98 @@ contract Orders is MainDemoConsumerBase {
         balances[msg.sender] += amount;
 
         emit NewDeposit(msg.sender, amount);
+    }
+
+    // note: there is no bool check for order if user index is 0
+    function modifyOrder(
+        bytes32 pair,
+        bool isUp,
+        OpenOrder calldata updatedOrder
+    ) external {
+        OpenOrder storage order;
+        if (isUp) {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[msg.sender]
+            ];
+        } else {
+            order = openOrders[pair].upOffers[
+                openOrders[pair].upOfferIndex[msg.sender]
+            ];
+        }
+        order.notional = updatedOrder.notional;
+        order.margin = updatedOrder.margin;
+    }
+
+    function addMargin(
+        bytes32 pair,
+        bool isUp,
+        uint256 additionalMargin
+    ) external {
+        MatchedOrder storage order;
+        //     struct MatchedOrder {
+        //     address user;
+        //     uint256 notional;
+        //     uint256 posted;
+        //     int128 lastCorrelation;
+        //     uint128 updateNonce;
+        // }
+        // TODO: nice to have - check if positoin already settled or liquidated
+
+        if (isUp) {
+            order = matchedOrders[pair].upPositions[
+                matchedOrders[pair].upPositionIndex[msg.sender]
+            ];
+        } else {
+            order = matchedOrders[pair].downPositions[
+                matchedOrders[pair].downPositionIndex[msg.sender]
+            ];
+        }
+
+        uint256 notionalToMarginDiff = order.notional - order.posted;
+        require(
+            additionalMargin <= notionalToMarginDiff,
+            "margin exceeds notional"
+        );
+
+        order.posted += additionalMargin;
+
+        // TODO: check what events you need
+    }
+
+    function make(
+        bytes32 pair,
+        bool isUp,
+        uint256 notional,
+        uint256 margin
+    ) external {
+        require(notional > 0, "notional must be gt 0");
+        require(margin > 0, "margin must be gt 0");
+        require(margin <= notional, "margin gt notional");
+
+        uint256 _deposit = balances[msg.sender];
+        require(_deposit >= margin, "insufficient balance");
+
+        balances[msg.sender] -= margin;
+
+        require(
+            (margin * 100 * ARITH_FACTOR) / notional > margin * ARITH_FACTOR,
+            "must be above margin level"
+        );
+
+        OpenOrdersMarket storage oo = openOrders[pair];
+        if (isUp) {
+            require(oo.upOfferIndex[msg.sender] == 0, "use modifyOrder");
+            oo.notionalUpPool += notional;
+            oo.upOffers.push(OpenOrder(msg.sender, notional, margin));
+            oo.upOfferIndex[msg.sender] = oo.upOffers.length - 1;
+        } else {
+            require(oo.downOfferIndex[msg.sender] == 0, "use modifyOrder");
+            oo.notionalUpPool += notional;
+            oo.downOffers.push(OpenOrder(msg.sender, notional, margin));
+            oo.downOfferIndex[msg.sender] = oo.downOffers.length - 1;
+        }
+
+        emit MakeOffer(msg.sender, isUp, notional, margin);
     }
 
     function take(
@@ -181,6 +251,14 @@ contract Orders is MainDemoConsumerBase {
 
         OpenOrdersMarket storage oo = openOrders[key];
 
+        MatchedOrdersMarket storage mm = matchedOrders[key];
+        if (mm.settlementDate == 0) {
+            // refine this later
+            mm.settlementDate = block.timestamp + 30 days;
+        }
+        mm.totalNotional += notional;
+        uint256 idx = 0;
+
         if (!isUp) {
             uint256 upPool = oo.notionalUpPool;
             require(upPool > 0, "up pool is zero");
@@ -193,25 +271,19 @@ contract Orders is MainDemoConsumerBase {
             }
 
             OpenOrder[] storage upOffers = oo.upOffers;
-
-            uint256 idx = 0;
+            uint256 upOffersLength = oo.upOffers.length;
 
             // struct MatchedOrdersMarket {
             //         uint256 totalNotional;
             //         MatchedOrder[] upPositions;
             //         MatchedOrder[] downPositions;
+            // mapping(address => uint256) upPositionIndex;
+            // mapping(address => uint256) downPositionIndex;
             //         int256 rebalanceAmount;
             //         uint256 settlementDate;
             // }
 
-            MatchedOrdersMarket storage mm = matchedOrders[key];
-            if (mm.settlementDate == 0) {
-                // refine this later
-                mm.settlementDate = block.timestamp + 30 days;
-            }
-            mm.totalNotional += notional;
-
-            (uint256 corr, uint nonce) = executeLatestCorrelation(key);
+            (int128 corr, uint128 nonce) = executeLatestCorrelation(key);
 
             uint256 notionalRemaining = notional;
             while (true) {
@@ -229,15 +301,35 @@ contract Orders is MainDemoConsumerBase {
                             nonce
                         )
                     );
+                    mm.upPositionIndex[upOffer.user] =
+                        mm.upPositions.length -
+                        1;
                     notionalRemaining -= upOfferNotional;
 
                     delete upOffers[idx];
                     oo.upOfferIndex[upOffer.user] = 0;
                 } else {
+                    // note: this case needs to be handled, as margin ratio is different than expected
+                    upOffers[idx].notional -= notionalRemaining;
                     notionalRemaining = 0;
-                    upOffers[idx].notional -= notional;
-                    oo.upOfferIndex[upOffer.user] = 0;
 
+                    mm.upPositions.push(
+                        MatchedOrder(
+                            upOffer.user,
+                            notionalRemaining,
+                            upOffer.margin,
+                            corr,
+                            nonce
+                        )
+                    );
+                    mm.upPositionIndex[upOffer.user] =
+                        mm.upPositions.length -
+                        1;
+
+                    break;
+                }
+
+                if (++idx > upOffersLength) {
                     break;
                 }
             }
@@ -246,10 +338,15 @@ contract Orders is MainDemoConsumerBase {
 
             if (isFullyMatched) {
                 oo.notionalDownPool -= notional;
+                delete oo.downOffers[oo.downOfferIndex[msg.sender]];
+                oo.downOfferIndex[msg.sender] = 0;
                 dPos = MatchedOrder(msg.sender, notional, margin, corr, nonce);
             } else {
-                uint256 notionalFilled = notional;
+                uint256 notionalFilled = notional - notionalRemaining;
 
+                oo
+                    .downOffers[oo.downOfferIndex[msg.sender]]
+                    .notional -= notionalFilled;
                 oo.notionalDownPool -= notionalFilled;
                 dPos = MatchedOrder(
                     msg.sender,
@@ -260,22 +357,57 @@ contract Orders is MainDemoConsumerBase {
                 );
             }
             mm.downPositions.push(dPos);
-        } else {}
+            mm.downPositionIndex[msg.sender] = mm.upPositions.length - 1;
+        } else {
+            // TODO: do up taker as inverse of above
+        }
 
         // emit PlaceOrder(seller, msg.sender, amount);
     }
 
     /// @notice Allows user to withdraw from their unlocked balance
     /// @param amount amount of usdc tokens to withdraw
-    // function withdrawFunds(uint256 amount) external {
-    //     uint256 balanceAmount = balances[msg.sender];
-    //     require(balanceAmount >= amount, "Not enough ablance");
+    function withdrawFunds(uint256 amount) external {
+        uint256 balanceAmount = balances[msg.sender];
+        require(balanceAmount >= amount, "not enough balance");
 
-    //     balances[msg.sender] = balanceAmount - amount;
-    //     usdc.transfer(msg.sender, amount);
+        balances[msg.sender] = balanceAmount - amount;
+        usdc.transfer(msg.sender, amount);
 
-    //     emit WithdrawFunds(msg.sender, amount);
-    // }
+        emit WithdrawFunds(msg.sender, amount);
+    }
+
+    function notifyMarginCall(
+        bytes32 pair,
+        bool isUp,
+        address marginedUser
+    ) external {
+        if (isUp) {
+            // TODO: should check a mapping to see if push was already made for user - can likely skip for hackathon
+            marginCallTracking[pair].marginCallUps.push(
+                uint64(openOrders[pair].upOfferIndex[marginedUser])
+            );
+        } else {
+            // TODO: should check a mapping to see if push was already made for user
+            marginCallTracking[pair].marginCallDowns.push(
+                uint64(openOrders[pair].downOfferIndex[marginedUser])
+            );
+        }
+    }
+
+    function dailyCorrelationUpdate(
+        bytes32 pair,
+        bytes32[] calldata symbols
+    ) external {
+        // TODO: update only after 24hrs is passed check var
+        // update correlation
+        // calculate rebalance value
+        // marginCallTracking just check if it's below margin ratio, then liquidate which means add to rebalance
+        // if it liquidates ->
+        // delete upOffers[idx];
+        // oo.upOfferIndex[upOffer.user] = 0;
+        // add to rebalance
+    }
 
     // /// @notice allows a buyer to withdraw their order at maturity
     // /// @param index specifies the index of the order to redeem inside the order array for the buyer
@@ -309,7 +441,7 @@ contract Orders is MainDemoConsumerBase {
     /// @notice Returns current correlation
     function getCorrelationRate(
         bytes32 key
-    ) public view returns (uint256 value) {
+    ) public view returns (int128 value) {
         // gets current correlation
         value = 8000; // Not real code, just there for testing until we implement this function
     }
@@ -337,7 +469,7 @@ contract Orders is MainDemoConsumerBase {
 
     function executeLatestCorrelation(
         bytes32 key
-    ) private returns (uint256 corr, uint256 nonce) {
+    ) private returns (int128 corr, uint128 nonce) {
         // TODO: calc correlation in basis points
         corr = getCorrelationRate(key);
         correlationData[key].lastCorrelation = corr;
